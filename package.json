@@ -1,0 +1,27 @@
+{
+  "name": "passkey-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local passkey vault, Chrome provider, and owner-approved agent authentication",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "open": "node scripts/open.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node scripts/check.mjs",
+    "check:sessions": "node test/session-sharing-browser.mjs",
+    "share:agent": "node scripts/share-agent.mjs",
+    "import-session": "node scripts/import-session.mjs",
+    "open:debug": "node scripts/open.mjs --debug-browser"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "playwright-core": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.65.0.tgz",
+    "tldts": "7.5.4"
+  }
+}

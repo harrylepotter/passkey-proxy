@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Approve passkey · Passkey Proxy</title><link rel="stylesheet" href="popup.css"></head>
+<body><div class="mark">↗</div><p class="eyebrow">PASSKEY PROXY</p><h1 id="title">Passkey request</h1><p id="description">Checking the request…</p>
+<div class="provider-choice"><button id="use-os" type="button" class="secondary wide">Use OS passkeys</button><p class="muted">Use Chrome’s usual passkey options, including your OS, phone or security key. This switches providers for all tabs; retry the website’s passkey button afterward.</p></div>
+<div id="request-details" class="details"><small>Website</small><strong id="origin"></strong><small>Account</small><strong id="account"></strong></div>
+<form id="approval-form"><div id="account-select" hidden><label for="credential">Account</label><select id="credential"></select></div>
+<div id="verification" hidden><label for="passphrase">Verify with vault passphrase</label><input id="passphrase" type="password" autocomplete="current-password"><p class="muted">This site asks you to verify. Your passphrase stays between this extension and the local vault.</p></div>
+<p class="muted">Your private key stays in the vault. This is a software passkey provider; it does not claim hardware attestation.</p>
+<div class="actions"><button id="deny" type="button" class="secondary">Decline</button><button id="approve" disabled>Approve</button></div></form>
+<div id="os-selected" hidden><p class="muted">Return to the website and click its passkey button again. Chrome will show its usual options. To use the vault later, open this extension’s menu and choose “Use vault passkeys”.</p><button id="done" type="button" class="wide">Done</button></div>
+<p id="error" role="alert"></p><script src="approve.js"></script></body></html>

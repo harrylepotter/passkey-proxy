@@ -1,0 +1,64 @@
+COOKIE SESSION INVITES — EXISTING SESSION, ALREADY APPROVED
+
+This flow is separate from passkey signing. The owner explicitly clicked Create
+session invite in their Chrome extension while viewing the selected website.
+That action approves one collection of the captured cookies. A saved passkey,
+fresh WebAuthn challenge, vault unlock and second approval are not required.
+Do not apply /instructions or the passkey-discovery flow to this invitation.
+
+1. Open the supplied /session#session=... link in your existing task browser.
+   Keep using the same browser profile/context for cookie import and the task.
+   Keep the link's fragment token out of chat and logs. Use the link's HTTPS
+   origin for all gateway requests.
+2. GET /api/agent/session with Authorization: Bearer <session-token>. This returns
+   the selected site, cookie count, status, collection expiry and
+   importRequirements, never cookie values. importRequirements includes
+   requiresHttpOnlySupport, httpOnlyCount, secureCount, hostOnlyCount,
+   domainCookieCount, persistentCookieCount and sameSiteValues.
+   A GET or link preview does not consume the invite.
+3. Check what THIS invite requires, rather than requiring support for every
+   possible cookie attribute. If requiresHttpOnlySupport is false, a permitted
+   document.cookie operation may be sufficient; preserve the actual domain/
+   host-only scope, path, Secure, SameSite and expiry, and verify the result.
+   If requiresHttpOnlySupport is true, document.cookie cannot preserve that
+   attribute: use a supported browser cookie-import API. Do not silently discard
+   HttpOnly or another attribute. A previous successful login does not prove
+   that the previous import preserved these attributes. Identify the exact
+   operation and any limitation, rather than declaring all cookie use impossible.
+   If only a separate HTTP cookie jar is available, identify that separately;
+   it may support an authorized HTTP task, but does not log in the browser. Do
+   not substitute it for a required browser session. If the required import is
+   unsupported, report the missing operation before consuming the invite.
+   Do not request an owner token, password, vault passphrase or private key.
+4. POST /api/agent/session/redeem with the same Bearer token, Content-Type:
+   application/json and {"agent":"your agent name","purpose":"the owner's task"}.
+   This consumes the invite atomically. The response format is
+   passkey-proxy/cookie-session-v1, with site and storageState.cookies. Keep this
+   response in your private working environment, never in a chat reply.
+5. Use a supported cookie-import action to load storageState.cookies into your
+   task browser context. These use Playwright cookie fields. A leading dot on
+   domain denotes a domain cookie; a bare domain denotes host-only scope.
+   expires=-1 is a session cookie. An absent sameSite field means unspecified;
+   do not replace it with None. storageState.origins is empty.
+6. Open site in that context and verify the expected signed-in account before
+   performing the owner's task. Report success only after verifying access.
+   This is an existing-session transfer, not a fresh passkey authentication.
+
+The invite expires 10 minutes after creation, after one collection, on owner
+cancellation, or when the gateway restarts. The website's own cookie/session
+expiry is separate; the gateway cannot determine it from a cookie snapshot.
+Cancelling an invite does not revoke a session already imported by an agent.
+If the response is lost after collection, request a new invite; do not retry
+the consumed token. Cookie invites cannot renew themselves.
+
+The extension captures unpartitioned cookies applicable to the selected page
+in that tab's cookie store. This includes applicable HttpOnly and parent-domain
+cookies, but excludes unrelated hosts, sibling-only cookies, other paths,
+other profiles, third-party/partitioned cookies and local/session storage.
+Parent-domain cookies retain their original domain scope, which may include
+sibling subdomains. Some SSO, device-bound or storage-dependent sessions will
+not transfer using these cookies alone. No universal compatibility is claimed.
+
+The gateway retains the captured cookies only in memory until collection,
+cancellation or expiry. It does not export a browser profile or passkey. The
+public endpoint exposes no owner actions; the owner dashboard remains local.

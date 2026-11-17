@@ -1,0 +1,71 @@
+PASSKEY PROXY — AGENT PASSKEY LOGIN
+
+Use the owner-created access link for the named website account. Start a fresh
+passkey login from your own browser or HTTP client, using your available tools.
+Keep its challenge cookies, CSRF state and resulting session in that same client.
+The gateway signs the website's challenge after owner approval; the website
+creates your session when it accepts the signed response.
+
+CHOOSE THE INVITATION FLOW
+- /agent#link=... or /agent#invite=...: follow the passkey protocol below.
+- /session#session=...: read /session-instructions for the already-approved
+  cookie handoff. It needs no passkey challenge or additional approval.
+
+PASSKEY PROTOCOL
+1. GET /api/agent/config at the link's HTTPS origin with Authorization:
+   Bearer <link-or-invite-token>. Read the account, login.origin, login.rpId,
+   login.loginUrl and any login.options / login.verify hints.
+2. Start the website's passkey login in the client that will perform the task.
+   For a browser task, use the task browser and keep the same browser context.
+   An HTTP-only task may use an HTTP client and its own cookie jar. Gateway API
+   requests may use a separate HTTP tool; website login state stays in the
+   original client. Keep gateway tokens out of the website's pages and requests.
+3. Obtain fresh WebAuthn request options and identify how to submit the signed
+   response. Use the site's normal login flow, available network tools or a
+   verified per-site recipe. Discover missing request details from actual site
+   responses and source. Preserve the site's RP, origin, allowed credentials,
+   user verification and extensions. If a required operation is unavailable,
+   report that specific operation and the stage reached.
+4. POST /api/agent/requests with the link token and JSON:
+   {"agent":"your agent name","purpose":"the owner's task",
+    "ceremony":{"origin":"<actual sign-in origin>","options":<request-options object>}}
+   The origin and RP must match the configured link. Request approval when the
+   challenge is fresh and the website submission is ready. Send the request
+   options, keeping website cookies and CSRF state in the original client.
+5. Keep the returned accessToken out of chat. Poll GET /api/agent/request with
+   Authorization: Bearer <accessToken> every two seconds while the owner approves.
+   When status is ready, POST /api/agent/redeem with that token and JSON {}.
+   Collection is one-use. The response format is passkey-proxy/webauthn-v1.
+6. Submit the returned credential through the website's verification exchange
+   from the SAME browser or HTTP client that obtained the challenge, retaining
+   its cookies, CSRF and ceremony state. The gateway response contains a signed
+   WebAuthn assertion, not storageState or browser cookies.
+7. Verify the expected account is signed in before doing the authorized task.
+   A collected signature, HTTP 200 or redirect alone does not prove login.
+   A signed-in HTTP client does not by itself establish a browser login.
+
+Keep access links, request tokens, signed responses and session values out of
+chat and logs. The owner's private key and vault passphrase stay in the vault.
+Use the operations supported by your current tools. These instructions do not
+assert that a particular browser integration or evaluator is available.
+
+REPEAT ACCESS AND EXPIRY
+A #link= access link lasts until revoked; keep it for later logins. A #invite=
+invitation allows one request and expires after one hour. Each challenge request
+lasts at most two minutes, or less if the website expires its challenge.
+After a verified login, you may save a per-site recipe describing how to obtain
+fresh state; keep cookies, challenges, signatures and tokens out of that recipe.
+
+Use fresh website state and owner approval for each later login. An identical
+retry resumes an active request. To abandon a stale request, POST
+/api/agent/cancel with its accessToken and JSON {} before requesting a fresh
+challenge. Wait at least one minute between new requests on a persistent link.
+If collection fails ambiguously, check status before retrying. A collected
+response cannot be retrieved again. Gateway restarts discard pending requests;
+persistent links survive. Revocation prevents future approvals, but does not
+revoke a website session already established by the agent.
+
+LOCAL DEMO
+Demo Travel local demo: its options response contains publicKey and ceremonyId.
+Send publicKey as the request options, then POST {ceremonyId, credential} to
+/api/auth/verify from the original demo client.

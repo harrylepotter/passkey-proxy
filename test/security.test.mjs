@@ -1,0 +1,92 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { Vault } from '../src/vault.mjs';
+import { verifyRegistration, verifyAuthentication } from '../src/webauthn.mjs';
+import { Handoffs } from '../src/handoffs.mjs';
+import { encode, decode } from '../src/cbor.mjs';
+import { websiteTarget, cookiesForSite, validateSessionBundle } from '../src/session-handoff.mjs';
+const origin = 'http://localhost:4781', passphrase = 'testing-only-vault-passphrase';
+const challenge = () => randomBytes(32).toString('base64url');
+function registration() { return { challenge: challenge(), rp: { id: 'localhost' }, user: { id: 'dXNlcg', name: 'user@example.test' }, pubKeyCredParams: [{ type: 'public-key', alg: -7 }], authenticatorSelection: { userVerification: 'discouraged' } }; }
+test('CBOR uses standard wire encodings and rejects malformed input', () => {
+  assert.equal(encode(new Map([[1, 2], [3, -7], [-1, 1]])).toString('hex'), 'a3010203262001');
+  assert.deepEqual(decode(Buffer.from('a2616101616243010203', 'hex')), new Map([['a', 1], ['b', Buffer.from([1, 2, 3])]]));
+  for (const hex of ['ff', 'a201010102', '59001000', '0102']) assert.throws(() => decode(Buffer.from(hex, 'hex')));
+});
+test('encrypted vault persists keys, verifies signatures, and fails closed on lock, tampering, wrong RP or UV', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'passkey-vault-test-'));
+  try {
+    const file = join(dir, 'vault.json'), vault = new Vault(file, origin);
+    assert.throws(() => vault.setup('short'));
+    vault.setup(passphrase);
+    const creation = registration(), response = vault.register(creation, origin);
+    const publicKey = verifyRegistration(response, { challenge: creation.challenge, origin, rpID: 'localhost' });
+    const disk = readFileSync(file, 'utf8');
+    assert.ok(!disk.includes('privateKey')); assert.ok(!disk.includes('user@example.test')); assert.ok(!disk.includes(passphrase));
+    const options = { challenge: challenge(), rpId: 'localhost', allowCredentials: [{ id: response.id }], userVerification: 'discouraged' };
+    const expected = { challenge: options.challenge, origin, rpID: 'localhost', userID: creation.user.id };
+    const assertion = vault.authenticate(options, origin);
+    assert.equal(verifyAuthentication(assertion, expected, publicKey), 1);
+    assert.equal(Buffer.from(assertion.response.authenticatorData, 'base64url')[32] & 4, 0, 'Must not claim user verification');
+    assert.throws(() => verifyAuthentication(assertion, { ...expected, challenge: challenge() }, publicKey));
+    assert.throws(() => verifyAuthentication(assertion, { ...expected, origin: 'https://evil.test' }, publicKey));
+    assert.throws(() => verifyAuthentication(assertion, expected, { ...publicKey, counter: 1 }));
+    const forged = structuredClone(assertion); forged.response.signature = randomBytes(64).toString('base64url');
+    assert.throws(() => verifyAuthentication(forged, expected, publicKey));
+    assert.throws(() => vault.authenticate({ ...options, rpId: 'other.test' }, origin));
+    assert.throws(() => vault.authenticate(options, 'https://evil.test'));
+    assert.throws(() => vault.authenticate({ ...options, userVerification: 'required' }, origin));
+    assert.throws(() => vault.register({ ...creation, authenticatorSelection: { userVerification: 'required' } }, origin));
+    vault.lock(); assert.throws(() => vault.authenticate(options, origin)); assert.throws(() => vault.unlock('wrong-passphrase'));
+    assert.equal(vault.status().unlocked, false);
+    const reopened = new Vault(file, origin); reopened.unlock(passphrase);
+    assert.equal(verifyAuthentication(reopened.authenticate(options, origin), expected, { ...publicKey, counter: 1 }), 2);
+    reopened.lock();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test('invitations, approval and handoffs enforce one-use, expiry, and separate roles', () => {
+  let now = 1_000_000;
+  const gateway = new Handoffs({ now: () => now }), invite = gateway.invite();
+  const result = gateway.request(invite, 'the agent', 'Read my trips'), id = result.request.id;
+  assert.throws(() => gateway.request(invite, 'Other', 'Read'));
+  assert.throws(() => gateway.byToken(invite));
+  assert.throws(() => gateway.redeem(result.accessToken));
+  assert.throws(() => gateway.ready(id, {}));
+  gateway.begin(id); assert.throws(() => gateway.begin(id));
+  gateway.ready(id, { secretCookie: 'session-secret' });
+  assert.ok(!JSON.stringify(gateway.public(gateway.byId(id))).includes('session-secret'));
+  assert.ok(!JSON.stringify(gateway.public(gateway.byId(id))).includes('tokenHash'));
+  assert.deepEqual(gateway.redeem(result.accessToken).bundle, { secretCookie: 'session-secret' });
+  assert.throws(() => gateway.redeem(result.accessToken));
+  const rejected = gateway.request(gateway.invite(), 'Agent', 'Task'); gateway.deny(rejected.request.id);
+  assert.throws(() => gateway.begin(rejected.request.id)); assert.throws(() => gateway.redeem(rejected.accessToken));
+  const expiring = gateway.request(gateway.invite(), 'Agent', 'Task'); gateway.begin(expiring.request.id); gateway.ready(expiring.request.id, {});
+  now += 120001; assert.throws(() => gateway.redeem(expiring.accessToken)); assert.equal(gateway.byId(expiring.request.id).status, 'expired');
+  const pending = gateway.request(gateway.invite(), 'Agent', 'Task'); now += 600001;
+  assert.throws(() => gateway.begin(pending.request.id));
+  const oldInvite = gateway.invite(); now += 3600001; assert.throws(() => gateway.validInvite(oldInvite));
+});
+test('website invitations remain bound to the owner-selected account', () => {
+  const target = websiteTarget({ id: 'credential', rpId: 'service.example.test', rpName: 'Example Service', userName: 'owner@example.test', origin: 'https://auth.service.example.test' }, 'https://app.service.example.test');
+  assert.throws(() => websiteTarget({ rpId: 'service.example.test' }, 'https://service.example.test.evil.test'));
+  assert.throws(() => websiteTarget({ rpId: 'service.example.test' }, 'http://service.example.test'));
+  const h = new Handoffs(), invite = h.invite(target); target.site = 'https://evil.test';
+  const requested = h.request(invite, 'the agent', 'Read watchlist');
+  assert.equal(requested.request.target.site, 'https://app.service.example.test');
+  assert.equal(requested.request.target.account, 'owner@example.test');
+});
+test('legacy cookie-bundle importer rejects scope expansion', () => {
+  const cookie = { name: 'session', value: 'fixture-secret', domain: '.service.example.test', path: '/', httpOnly: true, secure: true, sameSite: 'Lax', expires: -1 };
+  const cookies = [cookie, { ...cookie, domain: 'auth.service.example.test' }, { ...cookie, domain: '.apple.com' }, { ...cookie, domain: 'evilservice.example.test' }, { ...cookie, domain: 'service.example.test.evil.test' }, { ...cookie, expires: 1 }];
+  assert.equal(cookiesForSite(cookies, 'service.example.test').length, 2);
+  const target = websiteTarget({ id: 'credential', rpId: 'service.example.test', userName: 'owner@example.test' }, 'https://app.service.example.test');
+  const bundle = { format: 'passkey-proxy/session-v1', ...target, sessionExpiresAt: null, storageState: { cookies: cookiesForSite(cookies, target.rpId), origins: [] } };
+  assert.equal(bundle.sessionExpiresAt, null); assert.equal(bundle.storageState.cookies.length, 2);
+  validateSessionBundle(bundle);
+  assert.throws(() => validateSessionBundle({ ...bundle, site: 'https://evil.test' }));
+  assert.throws(() => validateSessionBundle({ ...bundle, storageState: { cookies } }));
+});
